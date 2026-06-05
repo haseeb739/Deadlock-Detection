@@ -1,0 +1,1101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Deadlock Detection & Recovery</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Syne:wght@400;600;700;800&display=swap');
+
+  :root {
+    --bg: #0a0c0f;
+    --surface: #111318;
+    --surface2: #181c22;
+    --border: #242830;
+    --border2: #2e3440;
+    --text: #e8eaf0;
+    --text2: #7a8494;
+    --text3: #4a5260;
+    --accent: #4ade80;
+    --accent2: #22d3ee;
+    --danger: #f87171;
+    --warn: #fbbf24;
+    --purple: #a78bfa;
+    --proc-colors: #4ade80, #22d3ee, #a78bfa, #f472b6, #fb923c;
+    --res-colors: #fbbf24, #60a5fa, #34d399;
+    --radius: 8px;
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'Syne', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    min-height: 100vh;
+    font-size: 13px;
+  }
+
+  /* ── HEADER ── */
+  header {
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--surface);
+    position: sticky; top: 0; z-index: 100;
+  }
+  header h1 {
+    font-family: var(--sans);
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    color: var(--text);
+  }
+  header h1 span { color: var(--accent); }
+  .header-right { display: flex; align-items: center; gap: 10px; }
+
+  /* ── LAYOUT ── */
+  .app { display: grid; grid-template-columns: 280px 1fr 280px; height: calc(100vh - 57px); }
+  @media (max-width: 900px) { .app { grid-template-columns: 1fr; height: auto; } }
+
+  /* ── PANELS ── */
+  .panel {
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 16px;
+  }
+  .panel:last-child { border-right: none; border-left: 1px solid var(--border); }
+  .panel-title {
+    font-family: var(--sans);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text3);
+    margin-bottom: 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* ── CENTER AREA ── */
+  .center {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .canvas-wrap {
+    flex: 1;
+    position: relative;
+    background:
+      radial-gradient(ellipse at 20% 50%, rgba(74,222,128,0.03) 0%, transparent 60%),
+      radial-gradient(ellipse at 80% 30%, rgba(34,211,238,0.03) 0%, transparent 60%),
+      var(--bg);
+  }
+  canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  /* ── BOTTOM BAR ── */
+  .bottom-bar {
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  /* ── INPUTS ── */
+  select, input[type=text], input[type=number] {
+    background: var(--surface2);
+    border: 1px solid var(--border2);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: var(--radius);
+    outline: none;
+    width: 100%;
+    transition: border-color .2s;
+  }
+  select:focus, input:focus { border-color: var(--accent2); }
+  option { background: var(--surface2); }
+  label { font-size: 11px; color: var(--text2); display: block; margin-bottom: 4px; }
+
+  /* ── BUTTONS ── */
+  button {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 7px 14px;
+    border-radius: var(--radius);
+    border: 1px solid var(--border2);
+    background: var(--surface2);
+    color: var(--text);
+    cursor: pointer;
+    transition: all .15s;
+    white-space: nowrap;
+  }
+  button:hover { background: var(--border2); border-color: var(--text3); }
+  button.btn-accent { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 700; }
+  button.btn-accent:hover { background: #86efac; }
+  button.btn-danger { background: transparent; color: var(--danger); border-color: var(--danger); }
+  button.btn-danger:hover { background: rgba(248,113,113,0.1); }
+  button.btn-warn { background: transparent; color: var(--warn); border-color: var(--warn); }
+  button.btn-warn:hover { background: rgba(251,191,36,0.1); }
+  button.btn-purple { background: transparent; color: var(--purple); border-color: var(--purple); }
+  button.btn-purple:hover { background: rgba(167,139,250,0.1); }
+  button.btn-sm { padding: 4px 10px; font-size: 11px; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+
+  /* ── BADGES ── */
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 700;
+    padding: 3px 10px; border-radius: 99px;
+    font-family: var(--sans); letter-spacing: 0.3px;
+  }
+  .badge-ok   { background: rgba(74,222,128,.15); color: var(--accent); border: 1px solid rgba(74,222,128,.3); }
+  .badge-dead { background: rgba(248,113,113,.15); color: var(--danger); border: 1px solid rgba(248,113,113,.3); }
+  .badge-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; display: inline-block; animation: pulse 1.5s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+  /* ── PROCESS & RESOURCE CARDS ── */
+  .node-card {
+    background: var(--surface2);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    transition: border-color .2s;
+  }
+  .node-card.deadlocked { border-color: var(--danger); background: rgba(248,113,113,.05); }
+  .node-card.safe { border-color: rgba(74,222,128,.3); }
+  .node-card-header {
+    display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;
+  }
+  .node-name {
+    font-family: var(--sans); font-size: 14px; font-weight: 700;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .node-dot { width: 10px; height: 10px; border-radius: 50%; }
+  .node-info { font-size: 11px; color: var(--text2); margin-top: 2px; }
+  .pill {
+    display: inline-block; padding: 2px 7px; border-radius: 4px;
+    font-size: 10px; font-weight: 600; margin: 2px;
+  }
+  .pill-held { background: rgba(34,211,238,.15); color: var(--accent2); border: 1px solid rgba(34,211,238,.3); }
+  .pill-want { background: rgba(251,191,36,.15); color: var(--warn); border: 1px solid rgba(251,191,36,.3); }
+
+  /* ── LOG ── */
+  .log-wrap {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px;
+    max-height: 220px;
+    overflow-y: auto;
+    font-size: 11px;
+  }
+  .log-line { padding: 2px 0; color: var(--text2); border-bottom: 1px solid rgba(255,255,255,.03); }
+  .log-line.err { color: var(--danger); }
+  .log-line.ok  { color: var(--accent); }
+  .log-line.info{ color: var(--accent2); }
+  .log-line.warn{ color: var(--warn); }
+  .log-ts { color: var(--text3); margin-right: 6px; }
+
+  /* ── MATRIX ── */
+  .matrix-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th { background: var(--surface2); color: var(--text2); padding: 6px 8px; border: 1px solid var(--border2); font-family: var(--sans); font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }
+  td { padding: 5px 8px; border: 1px solid var(--border); text-align: center; }
+  td.cell-held { color: var(--accent2); font-weight: 700; }
+  td.cell-want { color: var(--warn); font-weight: 700; }
+  td.cell-empty { color: var(--text3); }
+  tr.deadlocked td { background: rgba(248,113,113,.05); }
+
+  /* ── SECTION SEP ── */
+  .sep { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+  .form-row.three { grid-template-columns: 1fr 1fr 1fr; }
+
+  /* ── RECOVERY ── */
+  .recovery-step {
+    background: var(--surface2);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius);
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    font-size: 12px;
+  }
+  .recovery-step-num {
+    font-family: var(--sans); font-size: 10px; font-weight: 700;
+    color: var(--text3); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px;
+  }
+  .recovery-action { color: var(--warn); font-weight: 600; }
+
+  /* ── SCROLLBAR ── */
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 9px; }
+
+  /* ── TOOLTIP ── */
+  .tooltip {
+    position: fixed; pointer-events: none;
+    background: var(--surface2); border: 1px solid var(--border2);
+    padding: 6px 10px; border-radius: var(--radius);
+    font-size: 12px; color: var(--text); z-index: 999;
+    opacity: 0; transition: opacity .15s;
+  }
+  .tab-row { display: flex; gap: 6px; margin-bottom: 12px; }
+  .tab { padding: 5px 12px; background: transparent; border-color: var(--border); color: var(--text2); font-size: 11px; }
+  .tab.active { background: var(--surface2); color: var(--text); border-color: var(--border2); }
+
+  .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+  .stat-box { background: var(--surface2); border: 1px solid var(--border2); border-radius: var(--radius); padding: 10px; text-align: center; }
+  .stat-val { font-family: var(--sans); font-size: 22px; font-weight: 800; color: var(--text); }
+  .stat-lbl { font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: .5px; margin-top: 2px; }
+
+  .preset-btn { width: 100%; margin-bottom: 6px; text-align: left; }
+  .empty-state { text-align: center; color: var(--text3); font-size: 12px; padding: 20px 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>dead<span>lock</span>.detect</h1>
+  <div class="header-right">
+    <span id="status-badge" class="badge badge-ok"><span class="badge-dot"></span> No Deadlock</span>
+    <button class="btn-accent" onclick="runDetection()">▶ Detect</button>
+  </div>
+</header>
+
+<div class="app">
+
+  <!-- ── LEFT PANEL ── -->
+  <div class="panel">
+    <div class="panel-title">System Setup</div>
+
+    <div class="stats-grid">
+      <div class="stat-box"><div class="stat-val" id="s-proc">4</div><div class="stat-lbl">Processes</div></div>
+      <div class="stat-box"><div class="stat-val" id="s-res">3</div><div class="stat-lbl">Resources</div></div>
+      <div class="stat-box"><div class="stat-val" id="s-edges">0</div><div class="stat-lbl">Edges</div></div>
+      <div class="stat-box"><div class="stat-val" id="s-cycle" style="color:var(--danger)">—</div><div class="stat-lbl">Cycle Len</div></div>
+    </div>
+
+    <div class="panel-title">Add Edge</div>
+    <div style="margin-bottom:8px;">
+      <label>From node</label>
+      <select id="edge-from"></select>
+    </div>
+    <div style="margin-bottom:8px;">
+      <label>Edge type</label>
+      <select id="edge-type">
+        <option value="request">P → R  (process requests resource)</option>
+        <option value="assign">R → P  (resource assigned to process)</option>
+      </select>
+    </div>
+    <div style="margin-bottom:10px;">
+      <label>To node</label>
+      <select id="edge-to"></select>
+    </div>
+    <button style="width:100%;margin-bottom:12px;" onclick="addEdge()">+ Add Edge</button>
+
+    <hr class="sep"/>
+    <div class="panel-title">Presets</div>
+    <button class="preset-btn" onclick="loadPreset('classic')">⚡ Classic Deadlock (P0↔P1)</button>
+    <button class="preset-btn" onclick="loadPreset('chain')">🔗 Chain Deadlock (P0→P1→P2→P0)</button>
+    <button class="preset-btn" onclick="loadPreset('safe')">✅ Safe State (no deadlock)</button>
+    <button class="preset-btn" onclick="loadPreset('multi')">💥 Multi-cycle Deadlock</button>
+
+    <hr class="sep"/>
+    <div class="panel-title">Configure</div>
+    <div class="form-row">
+      <div>
+        <label>Processes</label>
+        <input type="number" id="cfg-procs" value="4" min="2" max="6" onchange="reconfigure()"/>
+      </div>
+      <div>
+        <label>Resources</label>
+        <input type="number" id="cfg-res" value="3" min="1" max="5" onchange="reconfigure()"/>
+      </div>
+    </div>
+    <button class="btn-danger btn-sm" style="width:100%;margin-top:4px;" onclick="resetAll()">✕ Reset All</button>
+  </div>
+
+  <!-- ── CENTER ── -->
+  <div class="center">
+    <div class="canvas-wrap">
+      <canvas id="graph"></canvas>
+    </div>
+    <div class="bottom-bar">
+      <span style="color:var(--text2);font-size:11px;">RAG:</span>
+      <div style="display:flex;align-items:center;gap:6px;font-size:11px;">
+        <span style="display:inline-block;width:20px;height:2px;background:var(--accent2);"></span> assignment
+        <span style="display:inline-block;width:20px;height:2px;background:var(--warn);border-top:2px dashed var(--warn);"></span> request
+        <span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:rgba(74,222,128,.3);border:2px solid var(--accent);"></span> process
+        <span style="display:inline-block;width:14px;height:10px;background:rgba(34,211,238,.2);border:1.5px solid var(--accent2);border-radius:3px;"></span> resource
+      </div>
+      <div style="margin-left:auto;display:flex;gap:8px;">
+        <button onclick="autoLayout()">↻ Layout</button>
+        <button onclick="clearEdges()">Clear edges</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── RIGHT PANEL ── -->
+  <div class="panel">
+    <div class="tab-row">
+      <button class="tab active" onclick="switchTab('nodes',this)">Nodes</button>
+      <button class="tab" onclick="switchTab('matrix',this)">Matrix</button>
+      <button class="tab" onclick="switchTab('recovery',this)">Recovery</button>
+      <button class="tab" onclick="switchTab('log',this)">Log</button>
+    </div>
+
+    <!-- NODES TAB -->
+    <div id="tab-nodes">
+      <div class="panel-title">Processes</div>
+      <div id="proc-list"></div>
+      <hr class="sep"/>
+      <div class="panel-title">Resources</div>
+      <div id="res-list"></div>
+    </div>
+
+    <!-- MATRIX TAB -->
+    <div id="tab-matrix" style="display:none;">
+      <div class="panel-title">Allocation & Request Matrix</div>
+      <div class="matrix-wrap" id="matrix-wrap"></div>
+      <div style="margin-top:10px;font-size:11px;color:var(--text2);">
+        <span style="color:var(--accent2);">■</span> Held &nbsp;
+        <span style="color:var(--warn);">■</span> Requested
+      </div>
+    </div>
+
+    <!-- RECOVERY TAB -->
+    <div id="tab-recovery" style="display:none;">
+      <div class="panel-title">Recovery Strategies</div>
+      <div style="display:grid;gap:6px;margin-bottom:12px;">
+        <button class="btn-danger" onclick="recover('terminate')">☠ Terminate victim process</button>
+        <button class="btn-warn" onclick="recover('preempt')">⚡ Preempt resources</button>
+        <button class="btn-purple" onclick="recover('rollback')">↩ Rollback to checkpoint</button>
+        <button class="btn-sm btn-accent" onclick="bankerCheck()" style="margin-top:4px;">🔒 Banker's safe sequence</button>
+      </div>
+      <div id="recovery-out"></div>
+      <hr class="sep"/>
+      <div class="panel-title">Result</div>
+      <div id="banker-out" style="font-size:12px;color:var(--text3);">Run detection + strategy above.</div>
+    </div>
+
+    <!-- LOG TAB -->
+    <div id="tab-log" style="display:none;">
+      <div class="panel-title">Event Log</div>
+      <div class="log-wrap" id="log-wrap"></div>
+      <button class="btn-sm btn-danger" style="margin-top:8px;width:100%;" onclick="clearLog()">Clear log</button>
+    </div>
+  </div>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+// ═══════════════════════════════════════════════
+//  STATE
+// ═══════════════════════════════════════════════
+const PROC_COLORS = ['#4ade80','#22d3ee','#a78bfa','#f472b6','#fb923c','#e879f9'];
+const RES_COLORS  = ['#fbbf24','#60a5fa','#34d399','#f97316','#e879f9'];
+
+let S = {
+  procs: ['P0','P1','P2','P3'],
+  ress:  ['R0','R1','R2'],
+  held:  {},   // proc -> Set of res
+  wants: {},   // proc -> Set of res
+  positions: {},
+  cycleNodes: new Set(),
+  cycleEdges: new Set(),
+  log: [],
+};
+
+// ═══════════════════════════════════════════════
+//  INIT
+// ═══════════════════════════════════════════════
+function initState() {
+  S.held = {}; S.wants = {};
+  S.procs.forEach(p => { S.held[p]  = new Set(); S.wants[p] = new Set(); });
+  S.cycleNodes = new Set(); S.cycleEdges = new Set();
+  autoLayout();
+}
+
+window.onload = () => {
+  setupCanvas();
+  initState();
+  rebuildSelects();
+  loadPreset('classic');
+};
+
+window.onresize = () => { setupCanvas(); drawGraph(); };
+
+// ═══════════════════════════════════════════════
+//  CANVAS SETUP
+// ═══════════════════════════════════════════════
+let canvas, ctx, W, H;
+function setupCanvas() {
+  canvas = document.getElementById('graph');
+  ctx = canvas.getContext('2d');
+  const wrap = canvas.parentElement;
+  W = wrap.clientWidth;
+  H = wrap.clientHeight;
+  canvas.width  = W * devicePixelRatio;
+  canvas.height = H * devicePixelRatio;
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+}
+
+// ═══════════════════════════════════════════════
+//  LAYOUT
+// ═══════════════════════════════════════════════
+function autoLayout() {
+  const allNodes = [...S.procs, ...S.ress];
+  const cx = (W || 600) / 2, cy = (H || 400) / 2;
+  const r  = Math.min(cx, cy) * 0.72;
+  allNodes.forEach((n, i) => {
+    const angle = (2 * Math.PI * i / allNodes.length) - Math.PI / 2;
+    S.positions[n] = { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) };
+  });
+  drawGraph();
+}
+
+// ═══════════════════════════════════════════════
+//  DRAW
+// ═══════════════════════════════════════════════
+function drawGraph() {
+  if (!ctx) return;
+  ctx.clearRect(0, 0, W, H);
+
+  // Draw edges
+  S.procs.forEach(p => {
+    // assignment: R -> P (drawn first)
+    S.ress.forEach(r => {
+      if (S.held[p] && S.held[p].has(r)) {
+        drawEdge(S.positions[r], S.positions[p], 'assign',
+          S.cycleEdges.has(`${r}->${p}`) || S.cycleEdges.has(`${p}->${r}`));
+      }
+    });
+    // request: P -> R
+    if (S.wants[p]) S.wants[p].forEach(r => {
+      drawEdge(S.positions[p], S.positions[r], 'request',
+        S.cycleEdges.has(`${p}->${r}`) || S.cycleEdges.has(`${r}->${p}`));
+    });
+  });
+
+  // Draw nodes
+  S.ress.forEach((r, i) => drawResource(r, i));
+  S.procs.forEach((p, i) => drawProcess(p, i));
+}
+
+function drawEdge(from, to, type, isCycle) {
+  if (!from || !to) return;
+  const dx = to.x - from.x, dy = to.y - from.y;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  if (dist < 1) return;
+  const nx = dx/dist, ny = dy/dist;
+
+  const isProc = (type === 'request');
+  const startOffset = isProc ? 20 : 22;
+  const endOffset   = isProc ? 22 : 20;
+
+  const sx = from.x + nx * startOffset;
+  const sy = from.y + ny * startOffset;
+  const ex = to.x   - nx * endOffset;
+  const ey = to.y   - ny * endOffset;
+
+  ctx.save();
+  const col = isCycle ? '#f87171' : (type === 'assign' ? '#22d3ee' : '#fbbf24');
+  ctx.strokeStyle = col;
+  ctx.lineWidth   = isCycle ? 2.5 : 1.5;
+
+  if (type === 'request') {
+    ctx.setLineDash([5, 4]);
+  } else {
+    ctx.setLineDash([]);
+  }
+
+  if (isCycle) {
+    ctx.shadowColor = col;
+    ctx.shadowBlur  = 8;
+  }
+
+  ctx.beginPath();
+  ctx.moveTo(sx, sy);
+  ctx.lineTo(ex, ey);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.shadowBlur = 0;
+
+  // Arrowhead
+  const angle = Math.atan2(ey - sy, ex - sx);
+  const al = 10, aw = 5;
+  ctx.fillStyle = col;
+  ctx.beginPath();
+  ctx.moveTo(ex, ey);
+  ctx.lineTo(ex - al*Math.cos(angle-0.35), ey - al*Math.sin(angle-0.35));
+  ctx.lineTo(ex - al*Math.cos(angle+0.35), ey - al*Math.sin(angle+0.35));
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawProcess(p, i) {
+  const pos = S.positions[p];
+  if (!pos) return;
+  const col     = PROC_COLORS[i % PROC_COLORS.length];
+  const isDead  = S.cycleNodes.has(p);
+  const r       = 22;
+
+  ctx.save();
+  if (isDead) { ctx.shadowColor = '#f87171'; ctx.shadowBlur = 18; }
+
+  // Circle fill
+  ctx.beginPath();
+  ctx.arc(pos.x, pos.y, r, 0, Math.PI*2);
+  ctx.fillStyle = isDead
+    ? 'rgba(248,113,113,0.2)'
+    : `${col}22`;
+  ctx.fill();
+
+  // Circle border
+  ctx.strokeStyle = isDead ? '#f87171' : col;
+  ctx.lineWidth   = isDead ? 2.5 : 1.5;
+  ctx.stroke();
+  ctx.shadowBlur  = 0;
+
+  // Label
+  ctx.fillStyle   = isDead ? '#f87171' : col;
+  ctx.font        = `bold 12px 'Syne', sans-serif`;
+  ctx.textAlign   = 'center';
+  ctx.textBaseline= 'middle';
+  ctx.fillText(p, pos.x, pos.y);
+  ctx.restore();
+}
+
+function drawResource(r, i) {
+  const pos = S.positions[r];
+  if (!pos) return;
+  const col    = RES_COLORS[i % RES_COLORS.length];
+  const isDead = S.cycleNodes.has(r);
+  const w = 42, h = 28;
+
+  ctx.save();
+  if (isDead) { ctx.shadowColor = '#f87171'; ctx.shadowBlur = 18; }
+
+  // Rectangle
+  roundRect(ctx, pos.x - w/2, pos.y - h/2, w, h, 5);
+  ctx.fillStyle = isDead ? 'rgba(248,113,113,0.15)' : `${col}18`;
+  ctx.fill();
+
+  ctx.strokeStyle = isDead ? '#f87171' : col;
+  ctx.lineWidth   = isDead ? 2.5 : 1.5;
+  ctx.stroke();
+  ctx.shadowBlur  = 0;
+
+  // Label
+  ctx.fillStyle    = isDead ? '#f87171' : col;
+  ctx.font         = `bold 12px 'Syne', sans-serif`;
+  ctx.textAlign    = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(r, pos.x, pos.y);
+  ctx.restore();
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.lineTo(x+w-r, y); ctx.quadraticCurveTo(x+w, y, x+w, y+r);
+  ctx.lineTo(x+w, y+h-r); ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+  ctx.lineTo(x+r, y+h); ctx.quadraticCurveTo(x, y+h, x, y+h-r);
+  ctx.lineTo(x, y+r); ctx.quadraticCurveTo(x, y, x+r, y);
+  ctx.closePath();
+}
+
+// ═══════════════════════════════════════════════
+//  DRAG
+// ═══════════════════════════════════════════════
+let dragging = null, dragOffX = 0, dragOffY = 0;
+
+canvas.addEventListener('mousedown', e => {
+  const {x, y} = mousePos(e);
+  const all = [...S.procs, ...S.ress];
+  for (const n of all) {
+    const p = S.positions[n];
+    if (!p) continue;
+    const isProc = S.procs.includes(n);
+    const hit = isProc
+      ? Math.sqrt((x-p.x)**2+(y-p.y)**2) < 22
+      : Math.abs(x-p.x)<22 && Math.abs(y-p.y)<16;
+    if (hit) { dragging = n; dragOffX = x-p.x; dragOffY = y-p.y; return; }
+  }
+});
+canvas.addEventListener('mousemove', e => {
+  const {x, y} = mousePos(e);
+  if (dragging) {
+    S.positions[dragging] = { x: x-dragOffX, y: y-dragOffY };
+    drawGraph(); return;
+  }
+  // Tooltip
+  const all = [...S.procs, ...S.ress];
+  let found = null;
+  for (const n of all) {
+    const p = S.positions[n];
+    if (!p) continue;
+    const isProc = S.procs.includes(n);
+    const hit = isProc
+      ? Math.sqrt((x-p.x)**2+(y-p.y)**2) < 22
+      : Math.abs(x-p.x)<22 && Math.abs(y-p.y)<16;
+    if (hit) { found = n; break; }
+  }
+  const tip = document.getElementById('tooltip');
+  if (found) {
+    let txt = found;
+    if (S.procs.includes(found)) {
+      const h = [...(S.held[found]||[])].join(', ') || 'none';
+      const w = [...(S.wants[found]||[])].join(', ') || 'none';
+      txt = `${found}  |  holds: ${h}  |  wants: ${w}`;
+    } else {
+      const holders = S.procs.filter(p => S.held[p]&&S.held[p].has(found));
+      const waiters = S.procs.filter(p => S.wants[p]&&S.wants[p].has(found));
+      txt = `${found}  |  held by: ${holders.join(', ')||'none'}  |  waited by: ${waiters.join(', ')||'none'}`;
+    }
+    tip.textContent = txt;
+    tip.style.left  = (e.clientX + 14) + 'px';
+    tip.style.top   = (e.clientY - 10) + 'px';
+    tip.style.opacity = '1';
+  } else {
+    tip.style.opacity = '0';
+  }
+});
+canvas.addEventListener('mouseup', () => { dragging = null; });
+canvas.addEventListener('mouseleave', () => {
+  dragging = null;
+  document.getElementById('tooltip').style.opacity = '0';
+});
+
+function mousePos(e) {
+  const rect = canvas.getBoundingClientRect();
+  return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+}
+
+// ═══════════════════════════════════════════════
+//  DETECTION  (DFS cycle detection on RAG)
+// ═══════════════════════════════════════════════
+function buildAdjacency() {
+  const adj = {};
+  [...S.procs, ...S.ress].forEach(n => adj[n] = []);
+  S.procs.forEach(p => {
+    S.wants[p].forEach(r => adj[p].push(r));   // P -> R
+    S.held[p].forEach(r  => adj[r].push(p));   // R -> P
+  });
+  return adj;
+}
+
+function runDetection() {
+  const adj  = buildAdjacency();
+  const all  = [...S.procs, ...S.ress];
+  const color= {};  // 0=white,1=gray,2=black
+  const parent={};
+  all.forEach(n => color[n] = 0);
+
+  let cycle = null;
+
+  function dfs(u) {
+    color[u] = 1;
+    for (const v of adj[u]) {
+      if (color[v] === 1) {
+        // Found cycle — trace back
+        cycle = [v];
+        let cur = u;
+        while (cur !== v) { cycle.unshift(cur); cur = parent[cur]; }
+        cycle.unshift(v);
+        return true;
+      }
+      if (color[v] === 0) {
+        parent[v] = u;
+        if (dfs(v)) return true;
+      }
+    }
+    color[u] = 2;
+    return false;
+  }
+
+  for (const n of all) {
+    if (color[n] === 0) {
+      if (dfs(n)) break;
+    }
+  }
+
+  if (cycle) {
+    S.cycleNodes = new Set(cycle);
+    S.cycleEdges = new Set();
+    for (let i = 0; i < cycle.length - 1; i++) {
+      S.cycleEdges.add(`${cycle[i]}->${cycle[i+1]}`);
+      S.cycleEdges.add(`${cycle[i+1]}->${cycle[i]}`);
+    }
+    log(`DEADLOCK DETECTED — cycle: ${cycle.join(' → ')}`, 'err');
+    setStatus(true, cycle.length);
+    updateStats(cycle.length);
+  } else {
+    S.cycleNodes = new Set();
+    S.cycleEdges = new Set();
+    log('No deadlock detected — system is in safe state', 'ok');
+    setStatus(false, 0);
+    updateStats(0);
+  }
+
+  drawGraph();
+  refreshNodes();
+  buildMatrix();
+}
+
+function setStatus(dead, cycleLen) {
+  const badge = document.getElementById('status-badge');
+  if (dead) {
+    badge.className = 'badge badge-dead';
+    badge.innerHTML = `<span class="badge-dot"></span> Deadlock (${cycleLen} nodes)`;
+  } else {
+    badge.className = 'badge badge-ok';
+    badge.innerHTML = `<span class="badge-dot"></span> No Deadlock`;
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  RECOVERY
+// ═══════════════════════════════════════════════
+function recover(strategy) {
+  if (S.cycleNodes.size === 0) {
+    document.getElementById('recovery-out').innerHTML =
+      '<div class="empty-state">Run detection first (▶ Detect button)</div>';
+    return;
+  }
+  const deadProcs = [...S.cycleNodes].filter(n => S.procs.includes(n));
+  const deadRes   = [...S.cycleNodes].filter(n => S.ress.includes(n));
+  let out = '';
+
+  if (strategy === 'terminate') {
+    const victim = deadProcs[0];
+    out = `<div class="recovery-step">
+      <div class="recovery-step-num">Step 1 — Select victim</div>
+      <span class="recovery-action">Terminate ${victim}</span> (lowest priority in cycle)
+    </div>
+    <div class="recovery-step">
+      <div class="recovery-step-num">Step 2 — Release resources</div>
+      Release all resources held by ${victim}: ${[...(S.held[victim]||[])].join(', ')||'none'}
+    </div>
+    <div class="recovery-step">
+      <div class="recovery-step-num">Step 3 — Re-run detection</div>
+      Remaining processes may now proceed
+    </div>`;
+    // Apply
+    if (victim) {
+      S.held[victim].forEach(r => {}); // resources freed
+      S.held[victim]  = new Set();
+      S.wants[victim] = new Set();
+      log(`Recovery: terminated ${victim}, released its resources`, 'warn');
+    }
+  } else if (strategy === 'preempt') {
+    const res = deadRes[0] || deadRes[0];
+    out = `<div class="recovery-step">
+      <div class="recovery-step-num">Step 1 — Select resource</div>
+      Preempt <span class="recovery-action">${deadRes.join(', ')}</span> from deadlocked processes
+    </div>
+    <div class="recovery-step">
+      <div class="recovery-step-num">Step 2 — Rollback holder</div>
+      Rollback process holding ${deadRes[0]||'resource'} to safe checkpoint state
+    </div>
+    <div class="recovery-step">
+      <div class="recovery-step-num">Step 3 — Reallocate</div>
+      Assign preempted resources to waiting processes in priority order
+    </div>`;
+    deadRes.forEach(r => {
+      S.procs.forEach(p => {
+        if (S.held[p].has(r)) { S.held[p].delete(r); log(`Preempted ${r} from ${p}`, 'warn'); }
+      });
+    });
+  } else if (strategy === 'rollback') {
+    out = `<div class="recovery-step">
+      <div class="recovery-step-num">Step 1 — Identify checkpoint</div>
+      Roll back <span class="recovery-action">${deadProcs.join(', ')}</span> to last safe checkpoint
+    </div>
+    <div class="recovery-step">
+      <div class="recovery-step-num">Step 2 — Restore state</div>
+      Restore process memory, file handles, and resource allocations from checkpoint image
+    </div>
+    <div class="recovery-step">
+      <div class="recovery-step-num">Step 3 — Resume</div>
+      Resume execution — OS monitors for re-occurrence
+    </div>`;
+    log(`Recovery: rollback applied to ${deadProcs.join(', ')}`, 'warn');
+    deadProcs.forEach(p => { S.held[p] = new Set(); S.wants[p] = new Set(); });
+  }
+
+  document.getElementById('recovery-out').innerHTML = out;
+  S.cycleNodes = new Set(); S.cycleEdges = new Set();
+  setStatus(false, 0); updateStats(0);
+  drawGraph(); refreshNodes(); buildMatrix();
+  log('System state updated after recovery', 'ok');
+}
+
+function bankerCheck() {
+  // Simple Banker's safety check
+  const avail = {};
+  S.ress.forEach(r => {
+    let held = 0;
+    S.procs.forEach(p => { if (S.held[p].has(r)) held++; });
+    avail[r] = Math.max(0, 1 - held);  // assume each resource has 1 instance
+  });
+
+  const finish = {}; S.procs.forEach(p => finish[p] = false);
+  const safeSeq = [];
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    S.procs.forEach(p => {
+      if (finish[p]) return;
+      const canRun = [...S.wants[p]].every(r => avail[r] > 0 || !S.wants[p].has(r));
+      if (canRun || S.wants[p].size === 0) {
+        S.held[p].forEach(r => { avail[r] = (avail[r]||0) + 1; });
+        finish[p] = true; safeSeq.push(p); changed = true;
+      }
+    });
+  }
+
+  const allSafe = S.procs.every(p => finish[p]);
+  const el = document.getElementById('banker-out');
+  if (allSafe) {
+    el.innerHTML = `<span style="color:var(--accent)">✔ Safe sequence found:</span><br><span style="color:var(--text)">${safeSeq.join(' → ')}</span>`;
+    log(`Banker's: safe sequence — ${safeSeq.join(' → ')}`, 'ok');
+  } else {
+    const stuck = S.procs.filter(p => !finish[p]);
+    el.innerHTML = `<span style="color:var(--danger)">✘ No safe sequence.</span><br>Stuck: <span style="color:var(--danger)">${stuck.join(', ')}</span>`;
+    log(`Banker's: unsafe state — ${stuck.join(', ')} cannot complete`, 'err');
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  EDGE MANAGEMENT
+// ═══════════════════════════════════════════════
+function addEdge() {
+  const from = document.getElementById('edge-from').value;
+  const to   = document.getElementById('edge-to').value;
+  const type = document.getElementById('edge-type').value;
+  if (!from || !to || from === to) return;
+
+  if (type === 'request') {
+    const p = S.procs.includes(from) ? from : S.procs.includes(to) ? to : null;
+    const r = S.ress.includes(from)  ? from : S.ress.includes(to)  ? to : null;
+    if (!p || !r) { log('Request edge needs one process and one resource', 'err'); return; }
+    if (!S.wants[p].has(r)) { S.wants[p].add(r); log(`Edge: ${p} → ${r} (request)`, 'info'); }
+  } else {
+    const r = S.ress.includes(from)  ? from : S.ress.includes(to)  ? to : null;
+    const p = S.procs.includes(from) ? from : S.procs.includes(to) ? to : null;
+    if (!p || !r) { log('Assignment edge needs one resource and one process', 'err'); return; }
+    if (!S.held[p].has(r)) { S.held[p].add(r); log(`Edge: ${r} → ${p} (assignment)`, 'info'); }
+  }
+
+  updateStats(0); drawGraph(); refreshNodes(); buildMatrix();
+}
+
+function clearEdges() {
+  S.procs.forEach(p => { S.held[p] = new Set(); S.wants[p] = new Set(); });
+  S.cycleNodes = new Set(); S.cycleEdges = new Set();
+  setStatus(false, 0); updateStats(0);
+  drawGraph(); refreshNodes(); buildMatrix();
+  log('All edges cleared', 'warn');
+}
+
+// ═══════════════════════════════════════════════
+//  PRESETS
+// ═══════════════════════════════════════════════
+function loadPreset(name) {
+  initState();
+  if (name === 'classic') {
+    S.held['P0'].add('R0'); S.wants['P0'].add('R1');
+    S.held['P1'].add('R1'); S.wants['P1'].add('R0');
+    S.held['P2'].add('R2');
+    log('Preset: classic P0↔P1 deadlock', 'info');
+  } else if (name === 'chain') {
+    S.held['P0'].add('R0'); S.wants['P0'].add('R1');
+    S.held['P1'].add('R1'); S.wants['P1'].add('R2');
+    S.held['P2'].add('R2'); S.wants['P2'].add('R0');
+    log('Preset: 3-process chain deadlock', 'info');
+  } else if (name === 'safe') {
+    S.held['P0'].add('R0');
+    S.held['P1'].add('R1'); S.wants['P1'].add('R2');
+    S.held['P2'].add('R2');
+    log('Preset: safe state — no cycle', 'info');
+  } else if (name === 'multi') {
+    S.held['P0'].add('R0'); S.wants['P0'].add('R1');
+    S.held['P1'].add('R1'); S.wants['P1'].add('R0');
+    S.held['P2'].add('R2'); S.wants['P2'].add('R1');
+    S.held['P3'].add('R1'); S.wants['P3'].add('R2');
+    log('Preset: multi-cycle deadlock', 'info');
+  }
+  updateStats(0); drawGraph(); refreshNodes(); buildMatrix();
+  runDetection();
+}
+
+// ═══════════════════════════════════════════════
+//  CONFIGURE
+// ═══════════════════════════════════════════════
+function reconfigure() {
+  const np = parseInt(document.getElementById('cfg-procs').value) || 4;
+  const nr = parseInt(document.getElementById('cfg-res').value)   || 3;
+  S.procs = Array.from({length: np}, (_,i) => `P${i}`);
+  S.ress  = Array.from({length: nr}, (_,i) => `R${i}`);
+  initState(); rebuildSelects(); updateStats(0);
+  drawGraph(); refreshNodes(); buildMatrix();
+  log(`Reconfigured: ${np} processes, ${nr} resources`, 'info');
+}
+
+function rebuildSelects() {
+  const all = [...S.procs, ...S.ress];
+  ['edge-from','edge-to'].forEach(id => {
+    const s = document.getElementById(id);
+    s.innerHTML = all.map(n => `<option value="${n}">${n}</option>`).join('');
+  });
+}
+
+function resetAll() {
+  initState(); rebuildSelects(); updateStats(0);
+  setStatus(false, 0); drawGraph(); refreshNodes(); buildMatrix();
+  log('State reset', 'ok');
+}
+
+// ═══════════════════════════════════════════════
+//  UI REFRESH
+// ═══════════════════════════════════════════════
+function refreshNodes() {
+  // Processes
+  const pl = document.getElementById('proc-list');
+  pl.innerHTML = S.procs.map((p, i) => {
+    const dead  = S.cycleNodes.has(p);
+    const held  = [...(S.held[p] ||[])];
+    const wants = [...(S.wants[p]||[])];
+    const col   = PROC_COLORS[i % PROC_COLORS.length];
+    return `<div class="node-card ${dead?'deadlocked':''}">
+      <div class="node-card-header">
+        <div class="node-name">
+          <span class="node-dot" style="background:${col}"></span>${p}
+          ${dead ? '<span style="color:var(--danger);font-size:10px;">DEADLOCKED</span>' : ''}
+        </div>
+        <button class="btn-sm btn-danger" onclick="removeEdgesFor('${p}')">✕</button>
+      </div>
+      <div class="node-info">
+        Holds: ${held.map(r=>`<span class="pill pill-held">${r}</span>`).join('')||'<span style="color:var(--text3)">none</span>'}
+      </div>
+      <div class="node-info" style="margin-top:4px;">
+        Wants: ${wants.map(r=>`<span class="pill pill-want">${r}</span>`).join('')||'<span style="color:var(--text3)">none</span>'}
+      </div>
+    </div>`;
+  }).join('');
+
+  // Resources
+  const rl = document.getElementById('res-list');
+  rl.innerHTML = S.ress.map((r, i) => {
+    const dead    = S.cycleNodes.has(r);
+    const holders = S.procs.filter(p => S.held[p] && S.held[p].has(r));
+    const waiters = S.procs.filter(p => S.wants[p] && S.wants[p].has(r));
+    const col     = RES_COLORS[i % RES_COLORS.length];
+    return `<div class="node-card ${dead?'deadlocked':''}">
+      <div class="node-card-header">
+        <div class="node-name">
+          <span class="node-dot" style="background:${col};border-radius:2px"></span>${r}
+          ${dead ? '<span style="color:var(--danger);font-size:10px;">IN CYCLE</span>' : ''}
+        </div>
+        <button class="btn-sm btn-danger" onclick="removeEdgesFor('${r}')">✕</button>
+      </div>
+      <div class="node-info">
+        Held by: ${holders.map(p=>`<span class="pill pill-held">${p}</span>`).join('')||'<span style="color:var(--text3)">free</span>'}
+      </div>
+      <div class="node-info" style="margin-top:4px;">
+        Requested by: ${waiters.map(p=>`<span class="pill pill-want">${p}</span>`).join('')||'<span style="color:var(--text3)">none</span>'}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function removeEdgesFor(node) {
+  if (S.procs.includes(node)) {
+    S.held[node]  = new Set();
+    S.wants[node] = new Set();
+  } else {
+    S.procs.forEach(p => {
+      S.held[p].delete(node);
+      S.wants[p].delete(node);
+    });
+  }
+  S.cycleNodes = new Set(); S.cycleEdges = new Set();
+  setStatus(false, 0); updateStats(0);
+  drawGraph(); refreshNodes(); buildMatrix();
+  log(`Removed all edges for ${node}`, 'warn');
+}
+
+function buildMatrix() {
+  const rows = S.procs.map(p => {
+    const dead = S.cycleNodes.has(p);
+    const cells = S.ress.map(r => {
+      const h = S.held[p]  && S.held[p].has(r);
+      const w = S.wants[p] && S.wants[p].has(r);
+      return h ? `<td class="cell-held">H</td>`
+           : w ? `<td class="cell-want">W</td>`
+               : `<td class="cell-empty">·</td>`;
+    }).join('');
+    return `<tr class="${dead?'deadlocked':''}"><th>${p}</th>${cells}</tr>`;
+  }).join('');
+
+  const header = `<tr><th>P \\ R</th>${S.ress.map(r=>`<th>${r}</th>`).join('')}</tr>`;
+  document.getElementById('matrix-wrap').innerHTML =
+    `<table><thead>${header}</thead><tbody>${rows}</tbody></table>`;
+}
+
+function updateStats(cycleLen) {
+  document.getElementById('s-proc').textContent  = S.procs.length;
+  document.getElementById('s-res').textContent   = S.ress.length;
+  let edges = 0;
+  S.procs.forEach(p => { edges += S.held[p].size + S.wants[p].size; });
+  document.getElementById('s-edges').textContent = edges;
+  document.getElementById('s-cycle').textContent = cycleLen || '—';
+}
+
+// ═══════════════════════════════════════════════
+//  LOG
+// ═══════════════════════════════════════════════
+function log(msg, type='') {
+  const now = new Date();
+  const ts  = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`;
+  S.log.unshift({ts, msg, type});
+  const w   = document.getElementById('log-wrap');
+  w.innerHTML = S.log.slice(0,80).map(e =>
+    `<div class="log-line ${e.type}"><span class="log-ts">${e.ts}</span>${e.msg}</div>`
+  ).join('');
+}
+
+function clearLog() { S.log = []; document.getElementById('log-wrap').innerHTML = ''; }
+
+// ═══════════════════════════════════════════════
+//  TABS
+// ═══════════════════════════════════════════════
+function switchTab(name, btn) {
+  ['nodes','matrix','recovery','log'].forEach(t => {
+    document.getElementById('tab-'+t).style.display = t===name?'block':'none';
+  });
+  document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+}
+</script>
+</body>
+</html>
